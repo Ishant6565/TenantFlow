@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String?
+  passwordHash  String
+  avatarUrl     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  memberships   Membership[]
+  invitationsSent Invitation[] @relation("InvitedBy")
+  auditLogs     AuditLog[]
+  createdProjects TenantProject[]
+}
+
+model Organization {
+  id                  String           @id @default(cuid())
+  name                String
+  slug                String           @unique
+  plan                String           @default("FREE") // FREE, PRO, ENTERPRISE
+  billingEmail        String?
+  stripeCustomerId    String?          @unique
+  stripeSubscriptionId String?         @unique
+  subscriptionStatus  String           @default("ACTIVE") // ACTIVE, TRIALING, PAST_DUE, CANCELED
+  currentPeriodEnd    DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  memberships         Membership[]
+  invitations         Invitation[]
+  usageRecords        UsageRecord[]
+  auditLogs           AuditLog[]
+  apiKeys             ApiKey[]
+  projects            TenantProject[]
+  idempotencyKeys     IdempotencyKey[]
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           String       @default("MEMBER") // OWNER, ADMIN, MEMBER, VIEWER
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model Invitation {
+  id             String       @id @default(cuid())
+  email          String
+  organizationId String
+  role           String       @default("MEMBER")
+  token          String       @unique
+  status         String       @default("PENDING") // PENDING, ACCEPTED, REVOKED, EXPIRED
+  inviterId      String
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter        User         @relation("InvitedBy", fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([token])
+}
+
+model UsageRecord {
+  id             String       @id @default(cuid())
+  organizationId String
+  metricKey      String       // e.g. "api_requests", "projects_count", "storage_mb"
+  count          Int          @default(0)
+  periodStart    DateTime     @default(now())
+  periodEnd      DateTime
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, metricKey, periodStart])
+  @@index([organizationId])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  actorId        String?
+  actorEmail     String?
+  action         String       // e.g. "ORG_CREATED", "MEMBER_INVITED", "ROLE_UPDATED", "PLAN_UPGRADED", "WEBHOOK_PROCESSED"
+  resourceType   String       // e.g. "ORGANIZATION", "MEMBERSHIP", "SUBSCRIPTION", "PROJECT"
+  resourceId     String?
+  metadata       String?      // JSON stringified context & diff
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor          User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model IdempotencyKey {
+  id              String        @id // The idempotency key or webhook event_id (e.g. evt_12345)
+  organizationId  String?
+  action          String        // e.g. "stripe_webhook:invoice.paid", "checkout_completed"
+  status          String        @default("PROCESSING") // PROCESSING, COMPLETED, FAILED
+  responsePayload String?       // Cached response JSON
+  lockedAt        DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model ApiKey {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  keyPrefix      String       // First 8 chars for display (e.g. tf_live_...)
+  keyHash        String       // SHA-256 hash of secret key
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyHash])
+}
+
+model TenantProject {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  status         String       @default("ACTIVE") // ACTIVE, ARCHIVED
+  createdById    String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy      User         @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
